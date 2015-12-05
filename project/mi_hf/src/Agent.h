@@ -7,7 +7,7 @@ class Game;
 
 
 class Agent {
-private:
+public:
 	struct Record {
 		int posx, posy; // s
 		float utility[4];
@@ -22,6 +22,8 @@ public:
 	void Step();
 	void SetGame(Game* game);
 	void Reset();
+	
+
 
 private:
 	std::vector<Record> Q;
