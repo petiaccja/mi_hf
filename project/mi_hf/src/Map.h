@@ -12,7 +12,9 @@ public:
 			WALL,
 			FINISH,
 		};
+
 		eType type = FREE;
+
 		float Reward() {
 			switch (type)
 			{

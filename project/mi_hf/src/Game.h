@@ -1,17 +1,10 @@
 #pragma once
 
 #include <random>
+#include "Util.h"
 
 
 class Map;
-
-
-enum eAction {
-	UP = 0,
-	DOWN = 1,
-	LEFT = 2,
-	RIGHT = 3,
-};
 
 
 class Game {

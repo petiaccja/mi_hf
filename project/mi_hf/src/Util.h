@@ -12,3 +12,12 @@ inline size_t Seed() {
 	return std::clock();
 #endif
 }
+
+
+enum eAction {
+	UP = 0,
+	DOWN = 1,
+	LEFT = 2,
+	RIGHT = 3,
+};
+

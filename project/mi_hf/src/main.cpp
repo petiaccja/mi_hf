@@ -1,8 +1,12 @@
 #include <GL/glut.h>
+#include <GL/freeglut.h>
 #include <algorithm>
 #include <mutex>
 #include <thread>
 #include <iostream>
+#include <sstream>
+#include <memory>
+#include <iomanip>
 
 #include "Map.h"
 #include "Game.h"
@@ -14,13 +18,18 @@ using std::endl;
 int screenWidth = 800;
 int screenHeight = 600;
 
+static constexpr int mapWidth = 10, mapHeight = 10;
+
 
 const float divison = 0.7;
-std::vector<float> vec;
+std::vector<float> rewardHistory;
+std::vector<float> rewardHistoryLowpass;
 
 std::mutex mtx;
 
-Map map(10, 10);
+Map map(mapWidth, mapHeight);
+volatile float Q_values[mapWidth][mapHeight];
+volatile float Q_min = -1, Q_max = 1.0;
 Game game;
 Agent agent;
 std::thread teachThread;
@@ -28,19 +37,65 @@ volatile bool runTeach = true;
 volatile bool finished = false;
 
 
+void UtilityToColor(float utility, float min, float max, float& r, float& g, float& b) {
+	float t = (utility - min) / (max - min);
+	t = std::min(1.0f, std::max(0.0f, t)); // clamp to [0..1]
+	static constexpr float table[5][3] = {
+		{0,0,1},
+		{0,1,1},
+		{0,1,0},
+		{1,1,0},
+		{1,0,0},
+	};
+	int index1 = floor(t * 4) + 0.1;
+	int index2 = ceil(t * 4) + 0.1;
+	float ts = t - floor(t);
+	index1 = std::min(4, std::max(0, index1));
+	index2 = std::min(4, std::max(0, index2));
+	r = (1 - ts)*table[index1][0] + ts*table[index2][0];
+	g = (1 - ts)*table[index1][1] + ts*table[index2][1];
+	b = (1 - ts)*table[index1][2] + ts*table[index2][2];
+}
+
 void TeachAgent() {
 	cout << "teaching started..." << endl;
+
 	agent.Reset();
-	agent.SetGame(&game);
 	game.SetMap(&map);
-	int numIterations = 1;
+	agent.SetGame(&game);
+
+	mtx.lock();
+	rewardHistory.clear();
+	mtx.unlock();
+
+	int numIterations = 10000;
+	int i = 0;
+
 	while (numIterations > 0 && runTeach) {
 		game.NewGame();
+		agent.StartEpisode();
 		while (!game.Ended() && runTeach) {
 			agent.Step();
-			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+			int x = game.GetCurrentX();
+			int y = game.GetCurrentY();
+
+			float value = agent.GetQMax(x, y);
+			float max = Q_max;
+			float min = Q_min;
+			Q_values[x][y] = value;
+
+			Q_max = std::max(max, value);
+			Q_min = std::min(min, value);
+
+			//std::this_thread::sleep_for(std::chrono::milliseconds(200));
 		}
+		float reward = agent.EndEpisode();
+		mtx.lock();
+		rewardHistory.push_back(reward);
+		mtx.unlock();
 		numIterations--;
+		cout << "iteration " << ++i << " finished: r = " << reward << endl;
 	}
 	finished = true;
 	cout << "teaching finished!" << endl << endl;;
@@ -63,13 +118,22 @@ void DrawMap() {
 	float offx = pixelPerField / 2;
 	float offy = pixelPerField / 2;
 
+	float min = Q_min;
+	float max = Q_max;
 	for (int x = 0; x < map.GetWidth(); x++) {
 		for (int y = 0; y < map.GetHeight(); y++) {
 			glColor3f(0, 0, 0);
 			float cx = offx + x*pixelPerField;
-			float cy = offy + (map.GetHeight()-y-1)*pixelPerField;
+			float cy = offy + (map.GetHeight() - y - 1)*pixelPerField;
+
+			// frame with color coding
+			float r, g, b;
+			UtilityToColor(Q_values[x][y], min, max, r, g, b);
+			glColor3f(r, g, b);
 			DrawQuad(cx, cy, pixelPerField, pixelPerField);
-			switch (map(x,y).type)
+
+			// field
+			switch (map(x, y).type)
 			{
 				case Map::Field::FREE:
 					glColor3f(0.3, 0.48, 0.1);
@@ -94,11 +158,38 @@ void DrawMap() {
 		}
 	}
 
+
+	glColor3f(0, 0, 0);
+	for (int x = 0; x < map.GetWidth(); x++) {
+		for (int y = 0; y < map.GetHeight(); y++) {
+			float cx = offx + x*pixelPerField;
+			float cy = offy + (map.GetHeight() - y - 1)*pixelPerField;
+
+			// q values
+			glRasterPos2f(cx - pixelPerField*0.4, cy);
+			glColor3f(0.0f, 0.0f, 0.0f);
+			std::stringstream ss;
+			ss << std::setprecision(2);
+			ss << Q_values[x][y];
+			std::string s = ss.str();
+			std::unique_ptr<unsigned char[]> buffer(new unsigned char[s.size() + 1]);
+			for (size_t i = 0; i < s.size(); i++) {
+				buffer[i] = s[i];
+			}
+			buffer[s.size()] = '\0';
+			glutBitmapString(GLUT_BITMAP_HELVETICA_10, buffer.get());
+		}
+	}
+
 	glColor3f(0.95, 0.9, 0.8);
 	DrawQuad(offx + pixelPerField * game.GetCurrentX(),
 			 offy + pixelPerField * (map.GetHeight() - 1 - game.GetCurrentY()),
 			 pixelPerField / 2,
 			 pixelPerField / 2);
+
+	for (int i = 0; i <= 20; i++) {
+
+	}
 
 }
 
@@ -112,31 +203,73 @@ void DrawGraph() {
 	glVertex2f(0, screenHeight);
 	glEnd();
 
-	if (vec.size() == 0)
+	if (rewardHistory.size() == 0)
 		return;
 
 	float minElement;
 	float maxElement;
 
-	minElement = vec[0];
-	maxElement = vec[0];
+	minElement = rewardHistory[0];
+	maxElement = rewardHistory[0];
 
-	for (float value : vec) {
+	std::lock_guard<std::mutex> lk(mtx);
+	for (float value : rewardHistory) {
 		if (value < minElement) minElement = value;
 	}
 
-	for (float value : vec) {
+	for (float value : rewardHistory) {
 		if (value > maxElement) maxElement = value;
 	}
 
+
 	glBegin(GL_LINE_STRIP);
-	float x = 0.0;
-	for (float value : vec) {
-		x += screenWidth / (float)vec.size();
-		glColor3f(0, 0, 1);
+	size_t i = 0;
+	glColor3f(0, 0, 1);
+	for (float value : rewardHistory) {
+		float x = i*(screenWidth / (float)rewardHistory.size());
+		++i;
 		glVertex2f(x, screenHeight - (screenHeight*(1 - divison) / (maxElement - minElement) * (value - minElement)));
 	}
 	glEnd();
+
+
+	glColor3f(1, 0, 0);
+	glBegin(GL_LINE_STRIP);
+	i = 0;
+	for (float value : rewardHistoryLowpass) {
+		float x = i*(screenWidth / (float)rewardHistory.size());
+		++i;
+		glVertex2f(x, screenHeight - (screenHeight*(1 - divison) / (maxElement - minElement) * (value - minElement)));
+	}
+	glEnd();
+
+	if (rewardHistory.size() % 20) {
+		rewardHistoryLowpass.clear();
+		intptr_t size = (intptr_t)rewardHistory.size();
+		for (intptr_t i = 0; i < rewardHistory.size(); i++) {
+			float x = i*(screenWidth / (float)rewardHistory.size());
+			glColor3f(1, 0, 0);
+
+			// sinc filter with a main bump of -4..4
+			constexpr float spread = 1 / 4.0f;
+			constexpr float pi_rec = 1 / 3.14159265f;
+			float y = rewardHistory[i] * spread * pi_rec;
+			float wt = spread * pi_rec;
+			for (intptr_t filter = 1; filter < 30; filter++) {
+				intptr_t sample1 = i + filter;
+				intptr_t sample2 = i - filter;
+				sample1 = std::max(0, std::min(size - 1, sample1));
+				sample2 = std::max(0, std::min(size - 1, sample2));
+				float w = (sin(filter*spread) / (filter*spread)) * spread * pi_rec;
+				wt += w * 2;
+				y += (rewardHistory[sample1] + rewardHistory[sample2]) * w;
+			}
+			y /= wt;
+
+			rewardHistoryLowpass.push_back(y);
+		}
+	}
+
 
 }
 
@@ -146,10 +279,9 @@ void onInitialization() {
 	gluOrtho2D(0, screenWidth, screenHeight, 0);
 
 	map.Generate(5, 5);
-	map(9, 9).type = Map::Field::FINISH;
+	map(mapWidth - 1, 4).type = Map::Field::FINISH;
+	map(4, mapHeight - 1).type = Map::Field::FINISH;
 	map(0, 0).type = Map::Field::FREE;
-
-	
 }
 
 void onDisplay() {
@@ -228,6 +360,12 @@ void CleanupOnExit() {
 
 
 int main(int argc, char **argv) {
+	for (auto& u : Q_values) {
+		for (auto& v : u) {
+			v = 0;
+		}
+	}
+
 	glutInit(&argc, argv);
 	glutInitWindowSize(screenWidth, screenHeight);
 	glutInitWindowPosition(100, 100);
@@ -253,6 +391,6 @@ int main(int argc, char **argv) {
 	atexit(CleanupOnExit);
 
 	glutMainLoop();
-	
+
 	return 0;
 }
