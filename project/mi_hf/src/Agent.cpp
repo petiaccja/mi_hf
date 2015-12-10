@@ -18,7 +18,7 @@ void Agent::SelectNextStep(int x, int y, const Map& map, real& reward, eAction& 
 	real roll = rng_roll(rne);
 
 	// normal behaviour
-	if (roll > 0.02) {
+	if (roll > 0.03) {
 		reward = -std::numeric_limits<real>::infinity();
 		for (int i = 0; i < 4; i++) {
 			int newx = x, newy = y;
@@ -37,7 +37,7 @@ void Agent::SelectNextStep(int x, int y, const Map& map, real& reward, eAction& 
 					break;
 			}
 			if (!(newx < 0 || map.GetWidth() <= newx ||
-				newy < 0 || map.GetWidth() <= newy))
+				newy < 0 || map.GetHeight() <= newy))
 			{
 				real value = Q[newy*map.GetWidth() + newx][i];
 				if (reward < value) {
@@ -70,7 +70,7 @@ void Agent::SelectNextStep(int x, int y, const Map& map, real& reward, eAction& 
 				break;
 		}
 		if (!(newx < 0 || map.GetWidth() <= newx ||
-			newy < 0 || map.GetWidth() <= newy))
+			newy < 0 || map.GetHeight() <= newy))
 		{
 			reward = Q[newy*map.GetWidth() + newx][action];
 		}
@@ -83,8 +83,6 @@ void Agent::SelectNextStep(int x, int y, const Map& map, real& reward, eAction& 
 
 void Agent::Step() {
 	// constants
-	static constexpr real alpha = 0.2f;
-	static constexpr real gamma = 1.0f;
 	auto& map = *currentGame->GetMap();
 
 	// get current state
@@ -97,17 +95,10 @@ void Agent::Step() {
 	// update Q
 	N[indexS][lastAction]++;
 	real Qcurrent = Q[indexS][lastAction];
-	if (isnan(Qcurrent) || isinf(Qcurrent)) {
-		__debugbreak();
-	}
 	real maxNextValue;
 	eAction maxNextAction = UP;
 	SelectNextStep(x, y, map, maxNextValue, maxNextAction);
-	//Q[indexS][lastAction] = Qcurrent + alpha*N[indexS][lastAction] * (r + gamma*maxNextValue - Qcurrent);
 	Q[indexS][lastAction] = (1 - alpha)*Qcurrent + alpha*(r + gamma*maxNextValue);
-	if (isnan(Q[indexS][lastAction]) || isinf(Q[indexS][lastAction])) {
-		__debugbreak();
-	}
 
 	// perform next step
 	currentGame->PerformAction(maxNextAction);
@@ -154,8 +145,6 @@ void Agent::StartEpisode() {
 
 float Agent::EndEpisode() {
 	// constants
-	static constexpr real alpha = 0.2f;
-	static constexpr real gamma = 1.0f;
 	auto& map = *currentGame->GetMap();
 
 	// get current state
@@ -165,19 +154,11 @@ float Agent::EndEpisode() {
 	size_t indexS = y*map.GetWidth() + x;
 
 	// update Q
-	N[indexS][lastAction]++;
 	real Qcurrent = Q[indexS][lastAction];
-	if (isnan(Q[indexS][lastAction]) || isinf(Q[indexS][lastAction])) {
-		__debugbreak();
-	}
 	real maxNextValue;
-	eAction maxNextAction = UP;
+	eAction maxNextAction;
 	SelectNextStep(x, y, map, maxNextValue, maxNextAction);
-	//Q[indexS][lastAction] = Qcurrent + alpha*N[indexS][lastAction] * (r + gamma*maxNextValue - Qcurrent);
 	Q[indexS][lastAction] = (1 - alpha)*Qcurrent + alpha*(r + gamma*maxNextValue);
-	if (isnan(Q[indexS][lastAction]) || isinf(Q[indexS][lastAction])) {
-		__debugbreak();
-	}
 
 	return totalReward;
 }

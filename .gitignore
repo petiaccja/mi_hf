@@ -1,6 +1,9 @@
-﻿*.sdf
+*.sdf
 *.opensdf
 Debug
 Release
 *.suo
 *.vs
+*.vspx
+*.psess
+*.opendb

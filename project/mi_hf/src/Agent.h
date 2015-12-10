@@ -9,8 +9,7 @@
 class Game;
 class Map;
 
-using real = double;
-
+/*
 template <class T>
 struct DummyF {
 	uint32_t pad1[4];
@@ -62,8 +61,10 @@ struct DummyF {
 		}
 	}
 };
+*/
 
 class Agent {
+	using real = double;
 public:
 	Agent();
 	~Agent() = default;
@@ -80,8 +81,8 @@ public:
 private:
 	void SelectNextStep(int x, int y, const Map& map, real& reward, eAction& action);
 
-	std::vector</*std::array<float, 4>*/DummyF<real>> Q;
-	std::vector</*std::array<int, 4>*/DummyF<int>> N;
+	std::vector<std::array<float, 4>> Q;
+	std::vector<std::array<int, 4>> N;
 	Game* currentGame;
 	eAction lastAction;
 	real totalReward;
@@ -89,4 +90,7 @@ private:
 	std::mt19937 rne;
 	std::uniform_real_distribution<real> rng_roll;
 	std::uniform_int_distribution<int> rng_action;
+
+	static constexpr real alpha = 0.2f;
+	static constexpr real gamma = 1.0f;
 };

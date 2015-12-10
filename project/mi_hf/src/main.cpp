@@ -18,7 +18,27 @@ using std::endl;
 int screenWidth = 800;
 int screenHeight = 600;
 
-static constexpr int mapWidth = 10, mapHeight = 10;
+struct UIElement {
+	std::string name;
+	int value;
+};
+
+UIElement uiElements[] = {
+	{ "map width", 10 },
+	{ "map height", 10 },
+	{ "walls", 5 },
+	{ "mines", 5 },
+	{ "iterations", 100000 },
+};
+const int& mapWidth = uiElements[0].value;
+const int& mapHeight = uiElements[1].value;
+const int& numWalls = uiElements[2].value;
+const int& numMines = uiElements[3].value;
+volatile const int& numIterations = uiElements[4].value;
+volatile int currentIteration = 0;
+volatile int teachingIterationCount = numIterations;
+int activeUIElement = 0;
+const int numUIElements = sizeof(uiElements) / sizeof(uiElements[0]);
 
 
 const float divison = 0.7;
@@ -27,8 +47,8 @@ std::vector<float> rewardHistoryLowpass;
 
 std::mutex mtx;
 
-Map map(mapWidth, mapHeight);
-volatile float Q_values[mapWidth][mapHeight];
+Map map(2, 2);
+std::unique_ptr<volatile float[]> Q_values;
 volatile float Q_min = -1, Q_max = 1.0;
 Game game;
 Agent agent;
@@ -49,7 +69,7 @@ void UtilityToColor(float utility, float min, float max, float& r, float& g, flo
 	};
 	int index1 = floor(t * 4) + 0.1;
 	int index2 = ceil(t * 4) + 0.1;
-	float ts = t - floor(t);
+	float ts = t * 4 - floor(t * 4);
 	index1 = std::min(4, std::max(0, index1));
 	index2 = std::min(4, std::max(0, index2));
 	r = (1 - ts)*table[index1][0] + ts*table[index2][0];
@@ -57,8 +77,13 @@ void UtilityToColor(float utility, float min, float max, float& r, float& g, flo
 	b = (1 - ts)*table[index1][2] + ts*table[index2][2];
 }
 
+
 void TeachAgent() {
 	cout << "teaching started..." << endl;
+
+	// initalization
+	Q_max = 1;
+	Q_min = 0;
 
 	agent.Reset();
 	game.SetMap(&map);
@@ -68,34 +93,40 @@ void TeachAgent() {
 	rewardHistory.clear();
 	mtx.unlock();
 
-	int numIterations = 10000;
-	int i = 0;
+	teachingIterationCount = numIterations;
+	currentIteration = 0;
 
-	while (numIterations > 0 && runTeach) {
+	// teaching cycle
+	while (currentIteration < teachingIterationCount && runTeach) {
+		// play an episode
 		game.NewGame();
 		agent.StartEpisode();
 		while (!game.Ended() && runTeach) {
 			agent.Step();
-
-			int x = game.GetCurrentX();
-			int y = game.GetCurrentY();
-
-			float value = agent.GetQMax(x, y);
-			float max = Q_max;
-			float min = Q_min;
-			Q_values[x][y] = value;
-
-			Q_max = std::max(max, value);
-			Q_min = std::min(min, value);
-
-			//std::this_thread::sleep_for(std::chrono::milliseconds(200));
 		}
 		float reward = agent.EndEpisode();
+
+		// update results after each episode
 		mtx.lock();
 		rewardHistory.push_back(reward);
 		mtx.unlock();
-		numIterations--;
-		cout << "iteration " << ++i << " finished: r = " << reward << endl;
+
+		float minq = 0;
+		float maxq = 1;
+		for (size_t x = 0; x < map.GetWidth(); x++) {
+			for (size_t y = 0; y < map.GetHeight(); y++) {
+				float value = agent.GetQMax(x, y);
+				minq = std::min(value, minq);
+				maxq = std::max(value, maxq);
+				Q_values[x + y*map.GetWidth()] = value;
+			}
+		}
+		Q_min = minq;
+		Q_max = maxq;
+
+		// iteration finished
+		currentIteration++;
+		//cout << "iteration " << currentIteration << " finished: r = " << reward << endl;
 	}
 	finished = true;
 	cout << "teaching finished!" << endl << endl;;
@@ -113,13 +144,15 @@ void DrawQuad(float x, float y, float width, float height) {
 
 void DrawMap() {
 	float pixelPerField;
-	pixelPerField = std::min((float)screenWidth / map.GetWidth(), (float)screenHeight*divison / map.GetHeight());
+	pixelPerField = std::min((float)(screenWidth - 200) / map.GetWidth(), (float)(screenHeight*divison) / map.GetHeight());
 
 	float offx = pixelPerField / 2;
 	float offy = pixelPerField / 2;
 
 	float min = Q_min;
 	float max = Q_max;
+
+	// draw fields and frames
 	for (int x = 0; x < map.GetWidth(); x++) {
 		for (int y = 0; y < map.GetHeight(); y++) {
 			glColor3f(0, 0, 0);
@@ -128,7 +161,7 @@ void DrawMap() {
 
 			// frame with color coding
 			float r, g, b;
-			UtilityToColor(Q_values[x][y], min, max, r, g, b);
+			UtilityToColor(Q_values[x + y*map.GetWidth()], min, max, r, g, b);
 			glColor3f(r, g, b);
 			DrawQuad(cx, cy, pixelPerField, pixelPerField);
 
@@ -159,6 +192,7 @@ void DrawMap() {
 	}
 
 
+	// display Q table as text
 	glColor3f(0, 0, 0);
 	for (int x = 0; x < map.GetWidth(); x++) {
 		for (int y = 0; y < map.GetHeight(); y++) {
@@ -170,7 +204,7 @@ void DrawMap() {
 			glColor3f(0.0f, 0.0f, 0.0f);
 			std::stringstream ss;
 			ss << std::setprecision(2);
-			ss << Q_values[x][y];
+			ss << Q_values[x + y*map.GetWidth()];
 			std::string s = ss.str();
 			std::unique_ptr<unsigned char[]> buffer(new unsigned char[s.size() + 1]);
 			for (size_t i = 0; i < s.size(); i++) {
@@ -181,16 +215,12 @@ void DrawMap() {
 		}
 	}
 
+	// draw agent position
 	glColor3f(0.95, 0.9, 0.8);
 	DrawQuad(offx + pixelPerField * game.GetCurrentX(),
 			 offy + pixelPerField * (map.GetHeight() - 1 - game.GetCurrentY()),
 			 pixelPerField / 2,
 			 pixelPerField / 2);
-
-	for (int i = 0; i <= 20; i++) {
-
-	}
-
 }
 
 void DrawGraph() {
@@ -221,9 +251,10 @@ void DrawGraph() {
 		if (value > maxElement) maxElement = value;
 	}
 
-
+	// draw raw line
 	glBegin(GL_LINE_STRIP);
 	size_t i = 0;
+	glLineWidth(1.0f);
 	glColor3f(0, 0, 1);
 	for (float value : rewardHistory) {
 		float x = i*(screenWidth / (float)rewardHistory.size());
@@ -232,9 +263,10 @@ void DrawGraph() {
 	}
 	glEnd();
 
-
+	// draw filtered line
 	glColor3f(1, 0, 0);
 	glBegin(GL_LINE_STRIP);
+	glLineWidth(5.0f);
 	i = 0;
 	for (float value : rewardHistoryLowpass) {
 		float x = i*(screenWidth / (float)rewardHistory.size());
@@ -243,6 +275,7 @@ void DrawGraph() {
 	}
 	glEnd();
 
+	// recaulculate filtered line
 	if (rewardHistory.size() % 20) {
 		rewardHistoryLowpass.clear();
 		intptr_t size = (intptr_t)rewardHistory.size();
@@ -269,8 +302,87 @@ void DrawGraph() {
 			rewardHistoryLowpass.push_back(y);
 		}
 	}
+}
 
 
+void DrawUI() {
+	float pixelPerField;
+	pixelPerField = std::min((float)(screenWidth - 200) / map.GetWidth(), (float)(screenHeight*divison) / map.GetHeight());
+
+	float offx = pixelPerField * map.GetWidth() + 10;
+
+	// vertical offset index
+	int i;
+
+	// draw ui elements
+	for (i = 0; i < numUIElements; ++i) {
+		if (i == activeUIElement) {
+			glColor3f(0.8f, 0.2f, 0.2f);
+		}
+		else {
+			glColor3f(1.0f, 1.0f, 1.0f);
+		}
+		glRasterPos2f(offx, 20+i*20);
+
+		std::stringstream ss;
+		ss << uiElements[i].name << " = " << uiElements[i].value;
+
+		std::string s = ss.str();
+		std::unique_ptr<unsigned char[]> buffer(new unsigned char[s.size() + 1]);
+		for (size_t i = 0; i < s.size(); i++) {
+			buffer[i] = s[i];
+		}
+		buffer[s.size()] = '\0';
+
+		glutBitmapString(GLUT_BITMAP_HELVETICA_18, buffer.get());
+	}
+
+	// draw progress bar
+	glColor3f(0.5, 0.5, 0.5);
+	DrawQuad(offx + 90, 20 + i * 20, 180, 15);
+	glColor3f(0.9, 0.2, 0.2);
+	DrawQuad(offx + (float)currentIteration / teachingIterationCount * 0.5f * 180,
+			 20 + i * 20,
+			 (float)currentIteration / teachingIterationCount * 180,
+			 15);
+}
+
+void StartTeaching() {
+	if (finished && teachThread.joinable()) {
+		teachThread.join();
+	}
+	if (!teachThread.joinable()) {
+		runTeach = true;
+		finished = false;
+		teachThread = std::thread(TeachAgent);
+	}
+}
+
+void CancelTeaching() {
+	runTeach = false;
+	finished = false;
+	if (teachThread.joinable()) {
+		teachThread.join();
+	}
+}
+
+
+void CreateMap(int width, int height, int walls, int mines) {
+	// restrict width & height
+	width = std::max(2, width);
+	height = std::max(2, height);
+
+	// create the map
+	map.Resize(width, height);
+	map.Generate(walls, mines);
+	map(map.GetWidth() - 1, map.GetHeight() - 1).type = Map::Field::FINISH;
+	map(0, 0).type = Map::Field::FREE;
+
+	// create table for Q values
+	Q_values.reset(new volatile float[map.GetWidth()*map.GetHeight()]);
+	for (size_t i = 0; i < map.GetWidth()*map.GetHeight(); ++i) {
+		Q_values[i] = 0;
+	}
 }
 
 
@@ -278,10 +390,7 @@ void onInitialization() {
 	glViewport(0, 0, screenWidth, screenHeight);
 	gluOrtho2D(0, screenWidth, screenHeight, 0);
 
-	map.Generate(5, 5);
-	map(mapWidth - 1, 4).type = Map::Field::FINISH;
-	map(4, mapHeight - 1).type = Map::Field::FINISH;
-	map(0, 0).type = Map::Field::FREE;
+	CreateMap(mapWidth, mapHeight, numWalls, numMines);
 }
 
 void onDisplay() {
@@ -289,29 +398,60 @@ void onDisplay() {
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	DrawMap();
-
 	DrawGraph();
+	DrawUI();
 
 	glutSwapBuffers();
 }
 
 
 void onKeyboard(unsigned char key, int x, int y) {
-	if (key == 'p') {
-		if (finished && teachThread.joinable()) {
-			teachThread.join();
-		}
-		if (!teachThread.joinable()) {
-			runTeach = true;
-			finished = false;
-			teachThread = std::thread(TeachAgent);
-		}
+	// teaching and map
+	if (key == 't') {
+		StartTeaching();
 	}
 	if (key == 'c') {
-		runTeach = false;
-		finished = false;
-		if (teachThread.joinable()) {
-			teachThread.join();
+		CancelTeaching();
+	}
+	if (key == 'r') {
+		CancelTeaching();
+		agent.Reset();
+		CreateMap(mapWidth, mapHeight, numWalls, numMines);
+	}
+
+	// parameters menu
+	// up
+	if (key == 's') {
+		activeUIElement = (activeUIElement + 1) % numUIElements;
+	}
+	// down
+	if (key == 'w') {
+		activeUIElement = (activeUIElement - 1);
+		if (activeUIElement < 0) {
+			activeUIElement = numUIElements - 1;
+		}
+	}
+	// decrease
+	if (key == 'a') {
+		if (uiElements[activeUIElement].name == "iterations") {
+			uiElements[activeUIElement].value/=10;
+			if (uiElements[activeUIElement].value < 1) {
+				uiElements[activeUIElement].value = 1;
+			}
+		}
+		else {
+			uiElements[activeUIElement].value--;
+		}
+	}
+	// increase
+	if (key == 'd') {
+		if (uiElements[activeUIElement].name == "iterations") {
+			if (uiElements[activeUIElement].value < 100000000) {
+				uiElements[activeUIElement].value *= 10;
+			}
+		}
+		else {
+			uiElements[activeUIElement].value++;
 		}
 	}
 }
@@ -360,12 +500,6 @@ void CleanupOnExit() {
 
 
 int main(int argc, char **argv) {
-	for (auto& u : Q_values) {
-		for (auto& v : u) {
-			v = 0;
-		}
-	}
-
 	glutInit(&argc, argv);
 	glutInitWindowSize(screenWidth, screenHeight);
 	glutInitWindowPosition(100, 100);
