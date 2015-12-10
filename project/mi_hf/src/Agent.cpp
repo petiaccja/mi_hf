@@ -14,152 +14,99 @@ Agent::Agent() :
 	currentGame = nullptr;
 }
 
-void Agent::SelectNextStep(int x, int y, const Map& map, real& reward, eAction& action) {
-	real roll = rng_roll(rne);
 
+eAction Agent::SelectNextStep(int x, int y) {
+	real roll = rng_roll(rne);
+	eAction action;
 	// normal behaviour
-	if (roll > 0.03) {
-		reward = -std::numeric_limits<real>::infinity();
+	float utility = -std::numeric_limits<real>::infinity();
+	if (roll > 0.03) {		
 		for (int i = 0; i < 4; i++) {
-			int newx = x, newy = y;
-			switch (i) {
-				case UP:
-					newy++;
-					break;
-				case DOWN:
-					newy--;
-					break;
-				case RIGHT:
-					newx++;
-					break;
-				case LEFT:
-					newx--;
-					break;
-			}
-			if (!(newx < 0 || map.GetWidth() <= newx ||
-				newy < 0 || map.GetHeight() <= newy))
-			{
-				real value = Q[newy*map.GetWidth() + newx][i];
-				if (reward < value) {
-					reward = value;
-					action = (eAction)i;
-				}
-			}
+			float value = Q(x, y, (eAction)i);
+			if (utility < value) {
+				utility = value;
+				action = (eAction)i;
+			}			
 		}
-		if (reward == -std::numeric_limits<real>::infinity()) {
+
+
+		if (utility == -std::numeric_limits<real>::infinity()) {
 			__debugbreak();
 		}
-		assert(reward != -std::numeric_limits<real>::infinity());
+		assert(utility != -std::numeric_limits<real>::infinity());
 	}
 	// random exploration
 	else {
 		action = (eAction)rng_action(rne);
-		int newx = x, newy = y;
-		switch (action) {
-			case UP:
-				newy++;
-				break;
-			case DOWN:
-				newy--;
-				break;
-			case RIGHT:
-				newx++;
-				break;
-			case LEFT:
-				newx--;
-				break;
-		}
-		if (!(newx < 0 || map.GetWidth() <= newx ||
-			newy < 0 || map.GetHeight() <= newy))
-		{
-			reward = Q[newy*map.GetWidth() + newx][action];
-		}
-		else {
-			reward = -0.04;
-		}
-		
 	}
+	return action;
 }
 
-void Agent::Step() {
-	// constants
-	auto& map = *currentGame->GetMap();
 
-	// get current state
+void Agent::Step() {
+	if (!currentGame || !currentGame->GetMap()) {
+		return;
+	}
+
+	// variables
 	int x = currentGame->GetCurrentX();
 	int y = currentGame->GetCurrentY();
-	real r = currentGame->GetCurrentReward();
-	size_t indexS = y*map.GetWidth() + x;
-	assert(0 <= indexS && indexS < Q.size());
+	int newx, newy;
+	real Qold;
+	real Qmax;
+	eAction action;
+	real reward;
 
-	// update Q
-	N[indexS][lastAction]++;
-	real Qcurrent = Q[indexS][lastAction];
-	real maxNextValue;
-	eAction maxNextAction = UP;
-	SelectNextStep(x, y, map, maxNextValue, maxNextAction);
-	Q[indexS][lastAction] = (1 - alpha)*Qcurrent + alpha*(r + gamma*maxNextValue);
+	// select action by strategy
+	action = SelectNextStep(x, y);
 
-	// perform next step
-	currentGame->PerformAction(maxNextAction);
-	totalReward += currentGame->GetCurrentReward();
+	Qold = GetQ(x, y, action);
 
-	// update internals
-	lastAction = maxNextAction;
+	// perform action
+	bool isOver = currentGame->PerformAction(action);
+
+	// perceive the environment
+	reward = currentGame->GetCurrentReward();
+	newx = currentGame->GetCurrentX();
+	newy = currentGame->GetCurrentY();
+
+	// update Q accordingly
+	Qmax = GetQMax(newx, newy);
+
+	if (!isOver) {
+		Q(x, y, action) = Qold + alpha*(reward + gamma*Qmax - Qold);
+	}
+	else {
+		for (int i = 0; i < 4; i++) {
+			Q(newx, newy, (eAction)i) = reward;
+		}
+		Q(x, y, action) = Qold + alpha*(reward - Qold);
+	}
+
+	// log reward just for fun
+	totalReward += reward;
 }
 
 void Agent::Reset() {
-	for (auto& q : Q) {
+	for (auto& q : Q_) {
 		for (auto& v : q) {
 			v = 0;
 		}
 	}
-	for (auto& n : N) {
+	for (auto& n : N_) {
 		for (auto& v : n) {
 			v = 0;
 		}
 	}
 }
 
+
 void Agent::StartEpisode() {
-	totalReward = 0.0f;
-
-	// update Q
-	// there's nothing to update, since state == null
-
-	// perform next (first) step
-	eAction action;
-	real reward;
-	SelectNextStep(
-		currentGame->GetCurrentX(),
-		currentGame->GetCurrentY(),
-		*currentGame->GetMap(),
-		reward,
-		action);
-
-	currentGame->PerformAction(action);
-	totalReward += currentGame->GetCurrentReward();
-
-	lastAction = action;
+	totalReward = 0;
 }
 
+
 float Agent::EndEpisode() {
-	// constants
-	auto& map = *currentGame->GetMap();
-
-	// get current state
-	int x = currentGame->GetCurrentX();
-	int y = currentGame->GetCurrentY();
-	real r = currentGame->GetCurrentReward();
-	size_t indexS = y*map.GetWidth() + x;
-
-	// update Q
-	real Qcurrent = Q[indexS][lastAction];
-	real maxNextValue;
-	eAction maxNextAction;
-	SelectNextStep(x, y, map, maxNextValue, maxNextAction);
-	Q[indexS][lastAction] = (1 - alpha)*Qcurrent + alpha*(r + gamma*maxNextValue);
-
 	return totalReward;
 }
 
@@ -167,37 +114,30 @@ float Agent::EndEpisode() {
 void Agent::SetGame(Game* game) {
 	currentGame = game;
 	if (game->GetMap()) {
-		int w = game->GetMap()->GetWidth();
-		int h = game->GetMap()->GetHeight();
-		Q.resize(w*h);
-		N.resize(w*h);
+		width = game->GetMap()->GetWidth();
+		height = game->GetMap()->GetHeight();
+		Q_.resize(width*height);
+		N_.resize(width*height);
 	}
 	Reset();
 }
 
+float& Agent::Q(int x, int y, eAction action) {
+	assert(0 <= x && x < width && 0 <= y && y < height);
+	return Q_[y*width + x][action];
+}
+
+int& Agent::N(int x, int y, eAction action) {
+	assert(0 <= x && x < width && 0 <= y && y < height);
+	return N_[y*width + x][action];
+}
 
 float Agent::GetQ(int x, int y, eAction action) const {
-	auto* map = currentGame->GetMap();
-	if (!map) {
-		return 0;
-	}
-	if (x < 0 || map->GetWidth() <= x
-		|| y < 0 || map->GetHeight() <= y) 
-	{
-		return 0;
-	}
-	return Q[y*map->GetWidth() + x][action];
+	assert(0 <= x && x < width && 0 <= y && y < height);
+	return Q_[y*width + x][action];
 }
 
 float Agent::GetQMax(int x, int y) const {
-	auto* map = currentGame->GetMap();
-	if (!map) {
-		return 0;
-	}
-	if (x < 0 || map->GetWidth() <= x
-		|| y < 0 || map->GetHeight() <= y)
-	{
-		return 0;
-	}
-	return *std::max_element(Q[y*map->GetWidth() + x].begin(), Q[y*map->GetWidth() + x].end());
+	assert(0 <= x && x < width && 0 <= y && y < height);
+	return *std::max_element(Q_[y*width + x].begin(), Q_[y*width + x].end());
 }

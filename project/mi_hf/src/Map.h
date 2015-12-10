@@ -3,6 +3,11 @@
 #include <vector>
 #include <random>
 
+////////////////////////////////////////////////////////////////////////////////
+/// Map for the 'mines' problem.
+/// Contains the fields of the gaming environment. The fields are all one of the
+/// predefined ones. See Game for more.
+////////////////////////////////////////////////////////////////////////////////
 class Map {
 public:
 	struct Field {
@@ -31,18 +36,30 @@ public:
 			}
 		}
 	};
-
 public:
+	/// Create a map with given size.
+	/// \param width Width of the game environment.
+	/// \param height Height of the game environment.
 	Map(int width, int height);
 	~Map();
 
+	/// Resize the game environment.
+	/// \param width Width of the game environment.
+	/// \param height Height of the game environment.
 	void Resize(int width, int height);
+	/// Generate a random layout.
+	/// \param numWalls The approximate number of walls on the map.
+	/// \param numMines The approximate number of mines on the map.
 	void Generate(int numWalls, int numMines);
 
+	/// Get field at coordinates.
 	Field& operator()(int x, int y);
+	/// Get field at coordinates.
 	const Field& operator()(int x, int y) const;
 
+	/// Get the width of the map.
 	int GetWidth() const { return width; }
+	/// Get the height of the map.
 	int GetHeight() const { return height; }
 private:
 	std::vector<Field> fields;

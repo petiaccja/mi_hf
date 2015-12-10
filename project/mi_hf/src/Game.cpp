@@ -4,14 +4,15 @@
 
 Game::Game() {
 	map = nullptr;
+	posx = posy = 0;
 }
 
 
-void Game::PerformAction(eAction action) {
+bool Game::PerformAction(eAction action) {
 	std::uniform_real_distribution<float> rng(0, 1);
 	float roll = rng(rne);
 	if (roll < 0.1) {
-		// right
+		// random right turn
 		switch (action)
 		{
 			case UP:
@@ -29,7 +30,7 @@ void Game::PerformAction(eAction action) {
 		}
 	}
 	else if (roll < 0.2) {
-		// left
+		// random left turn
 		switch (action)
 		{
 			case UP:
@@ -67,10 +68,10 @@ void Game::PerformAction(eAction action) {
 	int newy = posy + deltay;
 
 	if (newx < 0 || map->GetWidth() <= newx || newy < 0 || map->GetHeight() <= newy) {
-		return;
+		return ended;
 	}
 	if ((*map)(newx, newy).type == Map::Field::WALL) {
-		return;
+		return ended;
 	}
 	if ((*map)(newx, newy).type == Map::Field::MINE) {
 		ended = true;
@@ -81,9 +82,13 @@ void Game::PerformAction(eAction action) {
 
 	posx = newx;
 	posy = newy;
+	return ended;
 }
 
 float Game::GetCurrentReward() const {
+	if (!map) {
+		return 0;
+	}
 	return (*map)(posx, posy).Reward();
 }
 

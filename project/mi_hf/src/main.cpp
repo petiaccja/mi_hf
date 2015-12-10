@@ -28,7 +28,7 @@ UIElement uiElements[] = {
 	{ "map height", 10 },
 	{ "walls", 5 },
 	{ "mines", 5 },
-	{ "iterations", 100000 },
+	{ "iterations", 10000 },
 };
 const int& mapWidth = uiElements[0].value;
 const int& mapHeight = uiElements[1].value;
@@ -39,6 +39,7 @@ volatile int currentIteration = 0;
 volatile int teachingIterationCount = numIterations;
 int activeUIElement = 0;
 const int numUIElements = sizeof(uiElements) / sizeof(uiElements[0]);
+volatile bool slowMotion = false;
 
 
 const float divison = 0.7;
@@ -91,10 +92,12 @@ void TeachAgent() {
 
 	mtx.lock();
 	rewardHistory.clear();
-	mtx.unlock();
 
 	teachingIterationCount = numIterations;
 	currentIteration = 0;
+
+	rewardHistory.resize(teachingIterationCount);
+	mtx.unlock();
 
 	// teaching cycle
 	while (currentIteration < teachingIterationCount && runTeach) {
@@ -103,13 +106,26 @@ void TeachAgent() {
 		agent.StartEpisode();
 		while (!game.Ended() && runTeach) {
 			agent.Step();
+			if (slowMotion) {
+				float minq = 0;
+				float maxq = 1;
+				for (size_t x = 0; x < map.GetWidth(); x++) {
+					for (size_t y = 0; y < map.GetHeight(); y++) {
+						float value = agent.GetQMax(x, y);
+						minq = std::min(value, minq);
+						maxq = std::max(value, maxq);
+						Q_values[x + y*map.GetWidth()] = value;
+					}
+				}
+				Q_min = minq;
+				Q_max = maxq;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
 		}
 		float reward = agent.EndEpisode();
 
 		// update results after each episode
-		mtx.lock();
-		rewardHistory.push_back(reward);
-		mtx.unlock();
+		rewardHistory[currentIteration] = reward;
 
 		float minq = 0;
 		float maxq = 1;
@@ -128,6 +144,7 @@ void TeachAgent() {
 		currentIteration++;
 		//cout << "iteration " << currentIteration << " finished: r = " << reward << endl;
 	}
+
 	finished = true;
 	cout << "teaching finished!" << endl << endl;;
 }
@@ -233,31 +250,35 @@ void DrawGraph() {
 	glVertex2f(0, screenHeight);
 	glEnd();
 
-	if (rewardHistory.size() == 0)
+	std::lock_guard<std::mutex> lk(mtx);
+	size_t numItems = currentIteration + 1;
+	if (rewardHistory.size() == 0) {
+		numItems = 0;
+	}
+
+	if (numItems == 0)
 		return;
 
 	float minElement;
 	float maxElement;
-
 	minElement = rewardHistory[0];
 	maxElement = rewardHistory[0];
 
-	std::lock_guard<std::mutex> lk(mtx);
-	for (float value : rewardHistory) {
-		if (value < minElement) minElement = value;
-	}
-
-	for (float value : rewardHistory) {
-		if (value > maxElement) maxElement = value;
+	for (size_t i = 0; i < numItems; i++) {
+		float value = rewardHistory[i];
+		if (value < minElement)
+			minElement = value;
+		if (value > maxElement)
+			maxElement = value;
 	}
 
 	// draw raw line
 	glBegin(GL_LINE_STRIP);
-	size_t i = 0;
 	glLineWidth(1.0f);
 	glColor3f(0, 0, 1);
-	for (float value : rewardHistory) {
-		float x = i*(screenWidth / (float)rewardHistory.size());
+	for (size_t i = 0; i < numItems; i++) {
+		float value = rewardHistory[i];
+		float x = i*(screenWidth / (float)numItems);
 		++i;
 		glVertex2f(x, screenHeight - (screenHeight*(1 - divison) / (maxElement - minElement) * (value - minElement)));
 	}
@@ -267,20 +288,20 @@ void DrawGraph() {
 	glColor3f(1, 0, 0);
 	glBegin(GL_LINE_STRIP);
 	glLineWidth(5.0f);
-	i = 0;
-	for (float value : rewardHistoryLowpass) {
-		float x = i*(screenWidth / (float)rewardHistory.size());
-		++i;
-		glVertex2f(x, screenHeight - (screenHeight*(1 - divison) / (maxElement - minElement) * (value - minElement)));
+	for (size_t i = 0; i < rewardHistoryLowpass.size(); i++) {
+		float x = i*(screenWidth / (float)numItems);
+		glVertex2f(x, screenHeight - (screenHeight*(1 - divison) / (maxElement - minElement) * (rewardHistoryLowpass[i] - minElement)));
 	}
 	glEnd();
 
 	// recaulculate filtered line
-	if (rewardHistory.size() % 20) {
-		rewardHistoryLowpass.clear();
-		intptr_t size = (intptr_t)rewardHistory.size();
-		for (intptr_t i = 0; i < rewardHistory.size(); i++) {
-			float x = i*(screenWidth / (float)rewardHistory.size());
+	static size_t lastRecalcSize = 0;
+	if (numItems % 20 || (numItems == teachingIterationCount && lastRecalcSize != teachingIterationCount)) {
+		lastRecalcSize = numItems;
+		rewardHistoryLowpass.resize(numItems);
+		intptr_t size = (intptr_t)numItems;
+		for (intptr_t i = 0; i < numItems; i++) {
+			float x = i*(screenWidth / (float)numItems);
 			glColor3f(1, 0, 0);
 
 			// sinc filter with a main bump of -4..4
@@ -299,7 +320,7 @@ void DrawGraph() {
 			}
 			y /= wt;
 
-			rewardHistoryLowpass.push_back(y);
+			rewardHistoryLowpass[i] = y;
 		}
 	}
 }
@@ -417,6 +438,9 @@ void onKeyboard(unsigned char key, int x, int y) {
 		CancelTeaching();
 		agent.Reset();
 		CreateMap(mapWidth, mapHeight, numWalls, numMines);
+	}
+	if (key == 'z') {
+		slowMotion = !slowMotion;
 	}
 
 	// parameters menu
