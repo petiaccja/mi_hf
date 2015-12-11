@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <numeric>
 
 
 Agent::Agent() :
@@ -20,7 +21,7 @@ eAction Agent::SelectNextStep(int x, int y) {
 	eAction action;
 	// normal behaviour
 	float utility = -std::numeric_limits<real>::infinity();
-	if (roll > 0.03) {		
+	if (roll > explorerness) {
 		for (int i = 0; i < 4; i++) {
 			float value = Q(x, y, (eAction)i);
 			if (utility < value) {
@@ -64,6 +65,7 @@ void Agent::Step() {
 
 	// perform action
 	bool isOver = currentGame->PerformAction(action);
+	N(x, y, action)++;
 
 	// perceive the environment
 	reward = currentGame->GetCurrentReward();
@@ -140,4 +142,9 @@ float Agent::GetQ(int x, int y, eAction action) const {
 float Agent::GetQMax(int x, int y) const {
 	assert(0 <= x && x < width && 0 <= y && y < height);
 	return *std::max_element(Q_[y*width + x].begin(), Q_[y*width + x].end());
+}
+
+
+int Agent::GetNSum(int x, int y) const {
+	return std::accumulate(N_[y*width + x].begin(), N_[y*width + x].end(), 0);
 }

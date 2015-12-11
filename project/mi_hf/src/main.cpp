@@ -39,6 +39,8 @@ volatile const int& numIterations = uiElements[4].value;
 int activeUIElement = 0;
 const int numUIElements = sizeof(uiElements) / sizeof(uiElements[0]);
 volatile bool slowMotion = false;
+volatile bool QvsN = true;
+volatile bool filter = true;
 const float divison = 0.7;
 // Modified by the teaching session, required to display the progress bar.
 volatile int currentIteration = 0;
@@ -88,6 +90,28 @@ void UtilityToColor(float utility, float min, float max, float& r, float& g, flo
 	b = (1 - ts)*table[index1][2] + ts*table[index2][2];
 }
 
+
+void RefreshQvalues() {
+	float minq = 0;
+	float maxq = 1;
+	for (size_t x = 0; x < map.GetWidth(); x++) {
+		for (size_t y = 0; y < map.GetHeight(); y++) {
+			float value;
+			if (QvsN) {
+				value = agent.GetQMax(x, y);
+			}
+			else {
+				value = agent.GetNSum(x, y);
+			}
+			minq = std::min(value, minq);
+			maxq = std::max(value, maxq);
+			Q_values[x + y*map.GetWidth()] = value;
+		}
+	}
+	Q_min = minq;
+	Q_max = maxq;
+}
+
 /// Performs a teaching session of the agent.
 /// Teaches the agent by playing a given number of episodes.
 /// Puts the results in rewardHistory.
@@ -119,18 +143,7 @@ void TeachAgent() {
 		while (!game.Ended() && runTeach) {
 			agent.Step();
 			if (slowMotion) {
-				float minq = 0;
-				float maxq = 1;
-				for (size_t x = 0; x < map.GetWidth(); x++) {
-					for (size_t y = 0; y < map.GetHeight(); y++) {
-						float value = agent.GetQMax(x, y);
-						minq = std::min(value, minq);
-						maxq = std::max(value, maxq);
-						Q_values[x + y*map.GetWidth()] = value;
-					}
-				}
-				Q_min = minq;
-				Q_max = maxq;
+				RefreshQvalues();
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
 		}
@@ -139,18 +152,7 @@ void TeachAgent() {
 		// update results after each episode
 		rewardHistory[currentIteration] = reward;
 
-		float minq = 0;
-		float maxq = 1;
-		for (size_t x = 0; x < map.GetWidth(); x++) {
-			for (size_t y = 0; y < map.GetHeight(); y++) {
-				float value = agent.GetQMax(x, y);
-				minq = std::min(value, minq);
-				maxq = std::max(value, maxq);
-				Q_values[x + y*map.GetWidth()] = value;
-			}
-		}
-		Q_min = minq;
-		Q_max = maxq;
+		RefreshQvalues();
 
 		// iteration finished
 		currentIteration++;
@@ -228,24 +230,26 @@ void DrawMap() {
 
 	// display Q table as text
 	glColor3f(0, 0, 0);
-	for (int x = 0; x < map.GetWidth(); x++) {
-		for (int y = 0; y < map.GetHeight(); y++) {
-			float cx = offx + x*pixelPerField;
-			float cy = offy + (map.GetHeight() - y - 1)*pixelPerField;
+	if (QvsN) {
+		for (int x = 0; x < map.GetWidth(); x++) {
+			for (int y = 0; y < map.GetHeight(); y++) {
+				float cx = offx + x*pixelPerField;
+				float cy = offy + (map.GetHeight() - y - 1)*pixelPerField;
 
-			// q values
-			glRasterPos2f(cx - pixelPerField*0.4, cy);
-			glColor3f(0.0f, 0.0f, 0.0f);
-			std::stringstream ss;
-			ss << std::setprecision(2);
-			ss << Q_values[x + y*map.GetWidth()];
-			std::string s = ss.str();
-			std::unique_ptr<unsigned char[]> buffer(new unsigned char[s.size() + 1]);
-			for (size_t i = 0; i < s.size(); i++) {
-				buffer[i] = s[i];
+				// q values
+				glRasterPos2f(cx - pixelPerField*0.4, cy);
+				glColor3f(0.0f, 0.0f, 0.0f);
+				std::stringstream ss;
+				ss << std::setprecision(2);
+				ss << Q_values[x + y*map.GetWidth()];
+				std::string s = ss.str();
+				std::unique_ptr<unsigned char[]> buffer(new unsigned char[s.size() + 1]);
+				for (size_t i = 0; i < s.size(); i++) {
+					buffer[i] = s[i];
+				}
+				buffer[s.size()] = '\0';
+				glutBitmapString(GLUT_BITMAP_HELVETICA_10, buffer.get());
 			}
-			buffer[s.size()] = '\0';
-			glutBitmapString(GLUT_BITMAP_HELVETICA_10, buffer.get());
 		}
 	}
 
@@ -291,16 +295,18 @@ void DrawGraph() {
 	}
 
 	// draw raw line
-	glBegin(GL_LINE_STRIP);
-	glLineWidth(1.0f);
-	glColor3f(0, 0, 1);
-	for (size_t i = 0; i < numItems; i++) {
-		float value = rewardHistory[i];
-		float x = i*(screenWidth / (float)numItems);
-		++i;
-		glVertex2f(x, screenHeight - (screenHeight*(1 - divison) / (maxElement - minElement) * (value - minElement)));
+	if (filter) {
+		glBegin(GL_LINE_STRIP);
+		glLineWidth(1.0f);
+		glColor3f(0, 0, 1);
+		for (size_t i = 0; i < numItems; i++) {
+			float value = rewardHistory[i];
+			float x = i*(screenWidth / (float)numItems);
+			++i;
+			glVertex2f(x, screenHeight - (screenHeight*(1 - divison) / (maxElement - minElement) * (value - minElement)));
+		}
+		glEnd();
 	}
-	glEnd();
 
 	// draw filtered line
 	glColor3f(1, 0, 0);
@@ -384,6 +390,20 @@ void DrawUI() {
 			 20 + i * 20,
 			 (float)currentIteration / teachingIterationCount * 180,
 			 15);
+
+	i++;
+	glColor3f(0.8f, 0.8f, 0.8f);
+	glRasterPos2f(offx, 20 + i * 20);	
+	unsigned char helpText[] =
+		"t - start teaching\n"
+		"c - cancel teaching\n"
+		"r - new map\n"
+		"wasd - modify params\n"
+		"z - step-by-step toggle\n"
+		"h - Q table vs hot path toggle\n"
+		"f - filter toggle\n";
+	glutBitmapString(GLUT_BITMAP_HELVETICA_10, helpText);
+
 }
 
 /// Launches a teaching session.
@@ -471,6 +491,17 @@ void onKeyboard(unsigned char key, int x, int y) {
 	// slow-motion toggle
 	if (key == 'z') {
 		slowMotion = !slowMotion;
+	}
+	// show hot path
+	if (key == 'h') {
+		QvsN = !QvsN;
+		if (finished) {
+			RefreshQvalues();
+		}
+	}
+	// toggle low-pass filtering only
+	if (key == 'f') {
+		filter = !filter;
 	}
 
 	// parameters menu

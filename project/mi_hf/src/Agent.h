@@ -48,6 +48,8 @@ public:
 	/// \param x The x coordinate of the requested state.
 	/// \param y The y coordinate of the requested state.
 	float GetQMax(int x, int y) const;
+
+	int GetNSum(int x, int y) const;
 private:
 	/// Selects the next action of the agent.
 	/// Uses a greedy strategy with a little random behaviour.
@@ -73,5 +75,6 @@ private:
 	std::uniform_int_distribution<int> rng_action;
 
 	static constexpr real alpha = 0.2f; ///< Learning rate constant.
-	static constexpr real gamma = 0.9f; ///< Discount constant.
+	static constexpr real gamma = 0.98f; ///< Discount constant.
+	static constexpr real explorerness = 0.04f;
 };
