@@ -18,11 +18,11 @@ using std::endl;
 int screenWidth = 800;
 int screenHeight = 600;
 
+// User interface elements.
 struct UIElement {
 	std::string name;
 	int value;
 };
-
 UIElement uiElements[] = {
 	{ "map width", 10 },
 	{ "map height", 10 },
@@ -30,34 +30,44 @@ UIElement uiElements[] = {
 	{ "mines", 5 },
 	{ "iterations", 10000 },
 };
+// Variables related to the user itnerface.
 const int& mapWidth = uiElements[0].value;
 const int& mapHeight = uiElements[1].value;
 const int& numWalls = uiElements[2].value;
 const int& numMines = uiElements[3].value;
 volatile const int& numIterations = uiElements[4].value;
-volatile int currentIteration = 0;
-volatile int teachingIterationCount = numIterations;
 int activeUIElement = 0;
 const int numUIElements = sizeof(uiElements) / sizeof(uiElements[0]);
 volatile bool slowMotion = false;
-
-
 const float divison = 0.7;
+// Modified by the teaching session, required to display the progress bar.
+volatile int currentIteration = 0;
+volatile int teachingIterationCount = numIterations;
+
+// The history of reward improvements over a teaching session.
 std::vector<float> rewardHistory;
 std::vector<float> rewardHistoryLowpass;
 
-std::mutex mtx;
-
+// The core of the whole game environment.
 Map map(2, 2);
-std::unique_ptr<volatile float[]> Q_values;
-volatile float Q_min = -1, Q_max = 1.0;
 Game game;
 Agent agent;
+
+// Stuff for the teaching thread.
 std::thread teachThread;
+std::mutex mtx;
 volatile bool runTeach = true;
 volatile bool finished = false;
+std::unique_ptr<volatile float[]> Q_values;
+volatile float Q_min = -1, Q_max = 1.0;
 
-
+/// Computes the color coding for utility values.
+/// Maps utilities on a smooth scale from blue to red.
+/// \param min Lowest end of the scale.
+/// \param max Highest end of the scale.
+/// \param r [output] R value of the resulting color.
+/// \param g [output] G value of the resulting color.
+/// \param b [output] B value of the resulting color.
 void UtilityToColor(float utility, float min, float max, float& r, float& g, float& b) {
 	float t = (utility - min) / (max - min);
 	t = std::min(1.0f, std::max(0.0f, t)); // clamp to [0..1]
@@ -78,7 +88,9 @@ void UtilityToColor(float utility, float min, float max, float& r, float& g, flo
 	b = (1 - ts)*table[index1][2] + ts*table[index2][2];
 }
 
-
+/// Performs a teaching session of the agent.
+/// Teaches the agent by playing a given number of episodes.
+/// Puts the results in rewardHistory.
 void TeachAgent() {
 	cout << "teaching started..." << endl;
 
@@ -149,7 +161,11 @@ void TeachAgent() {
 	cout << "teaching finished!" << endl << endl;;
 }
 
-
+/// Draw a single axis-aligned rectangle on the screen.
+/// \param x X coordinate of the center.
+/// \param y Y coordinate of the center.
+/// \param width Width of the rectangle.
+/// \param height Height of the rectangle.
 void DrawQuad(float x, float y, float width, float height) {
 	glBegin(GL_QUADS);
 	glVertex2f(x - width / 2, y - height / 2);
@@ -159,6 +175,7 @@ void DrawQuad(float x, float y, float width, float height) {
 	glEnd();
 }
 
+/// Draws the game map, the agent, the utility-color-coded frames and utility texts.
 void DrawMap() {
 	float pixelPerField;
 	pixelPerField = std::min((float)(screenWidth - 200) / map.GetWidth(), (float)(screenHeight*divison) / map.GetHeight());
@@ -240,6 +257,7 @@ void DrawMap() {
 			 pixelPerField / 2);
 }
 
+/// Draws the graph which shows the improvement over iterations.
 void DrawGraph() {
 
 	glColor3f(1, 1, 1);
@@ -325,7 +343,7 @@ void DrawGraph() {
 	}
 }
 
-
+/// Draws the user interface on the upper right.
 void DrawUI() {
 	float pixelPerField;
 	pixelPerField = std::min((float)(screenWidth - 200) / map.GetWidth(), (float)(screenHeight*divison) / map.GetHeight());
@@ -368,6 +386,8 @@ void DrawUI() {
 			 15);
 }
 
+/// Launches a teaching session.
+/// Note that it is launched in a new thread.
 void StartTeaching() {
 	if (finished && teachThread.joinable()) {
 		teachThread.join();
@@ -379,6 +399,8 @@ void StartTeaching() {
 	}
 }
 
+/// Cancels the currently running teaching session.
+/// Kills it's thread, gracefully.
 void CancelTeaching() {
 	runTeach = false;
 	finished = false;
@@ -387,7 +409,8 @@ void CancelTeaching() {
 	}
 }
 
-
+/// Create a map according to the parameters specified.
+/// Also adds a start and a finish.
 void CreateMap(int width, int height, int walls, int mines) {
 	// restrict width & height
 	width = std::max(2, width);
@@ -406,7 +429,8 @@ void CreateMap(int width, int height, int walls, int mines) {
 	}
 }
 
-
+/// Initializes OpenGL and stuff like that.
+/// GLUT calls this at app start. 
 void onInitialization() {
 	glViewport(0, 0, screenWidth, screenHeight);
 	gluOrtho2D(0, screenWidth, screenHeight, 0);
@@ -414,6 +438,7 @@ void onInitialization() {
 	CreateMap(mapWidth, mapHeight, numWalls, numMines);
 }
 
+/// Redraws the entire OpenGL frame.
 void onDisplay() {
 	glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -426,19 +451,24 @@ void onDisplay() {
 }
 
 
+/// Handles GLUT keyboard events.
 void onKeyboard(unsigned char key, int x, int y) {
 	// teaching and map
+	// teach
 	if (key == 't') {
 		StartTeaching();
 	}
+	// cancel
 	if (key == 'c') {
 		CancelTeaching();
 	}
+	// regenerate map
 	if (key == 'r') {
 		CancelTeaching();
 		agent.Reset();
 		CreateMap(mapWidth, mapHeight, numWalls, numMines);
 	}
+	// slow-motion toggle
 	if (key == 'z') {
 		slowMotion = !slowMotion;
 	}
@@ -480,30 +510,26 @@ void onKeyboard(unsigned char key, int x, int y) {
 	}
 }
 
-
 void onKeyboardUp(unsigned char key, int x, int y) {
 
 }
-
 
 void onMouse(int button, int state, int x, int y) {
 	if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN)
 		glutPostRedisplay();
 }
 
-
 void onMouseMotion(int x, int y)
 {
 
 }
-
 
 void onIdle() {
 	long time = glutGet(GLUT_ELAPSED_TIME);
 	glutPostRedisplay();
 }
 
-
+/// Handles the resizing of the main window.
 void onReshape(GLint newWidth, GLint newHeight) {
 	screenWidth = newWidth;
 	screenHeight = newHeight;
@@ -514,7 +540,8 @@ void onReshape(GLint newWidth, GLint newHeight) {
 	gluOrtho2D(0, screenWidth, screenHeight, 0);
 }
 
-
+/// This function is to be registered with atexit() to clean up.
+/// Required because GLUT can go fuck itself.
 void CleanupOnExit() {
 	runTeach = false;
 	if (teachThread.joinable()) {
